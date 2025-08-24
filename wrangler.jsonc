@@ -1,7 +1,7 @@
 {
   "account_id": "ab3424a4adb3ea31508ddabe97164721",
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "rtdb-backend",
+  "name": "rtdbbk",
   "main": "src/index.js",
   "compatibility_date": "2025-08-24",
   "workers_dev": true,

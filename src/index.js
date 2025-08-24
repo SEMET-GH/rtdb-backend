@@ -16,10 +16,10 @@ const ALLOW_ORIGINS = new Set([
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:4321',
+  'http://localhost:4173',
   'http://127.0.0.1:5500',
   'http://127.0.0.1:5501',
-  'http://127.0.0.1:5502',
-  'http://localhost:4173'
+  'http://127.0.0.1:5502'
 ]);
 
 // API Tokens รวมทั้งหมด

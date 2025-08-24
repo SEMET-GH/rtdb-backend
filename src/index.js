@@ -7,6 +7,8 @@
 // FRAME_RYRRADAR = "allow" | "deny"    (optional; default: allow)
 
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { secureHeaders } from 'hono/secure-headers';
 
 /* ==================== CONFIG ==================== */
 const ALLOW_ORIGINS = new Set([
@@ -22,12 +24,10 @@ const ALLOW_ORIGINS = new Set([
   'http://127.0.0.1:5502'
 ]);
 
-// API Tokens รวมทั้งหมด
 const VALID_API_TOKENS = new Set([
   'vtsc-48583-secure-proxy-token-2025'
 ]);
 
-// Allowed targets สำหรับ /proxy
 const ALLOWED_TARGET_DOMAINS = new Set([
   'weather.tmd.go.th',
   'file.royalrain.go.th',
@@ -35,7 +35,6 @@ const ALLOWED_TARGET_DOMAINS = new Set([
   'pub-0160c42dd9644410895efe9a57af188e.r2.dev'
 ]);
 
-// Hosts ที่อนุญาตสำหรับ /radar
 const ALLOW_RADAR_HOSTS = new Set([
   'weather.tmd.go.th',
   'weather.bangkok.go.th'
@@ -44,7 +43,7 @@ const ALLOW_RADAR_HOSTS = new Set([
 /* ==================== APP ==================== */
 const app = new Hono();
 
-/* ========== Utilities: security & CORS ========== */
+/* ========== Utilities: security & headers ========== */
 function isAllowedOrigin(origin) {
   return !!origin && ALLOW_ORIGINS.has(origin);
 }
@@ -84,42 +83,6 @@ function jerr(code, msg, hdrs) {
   h.set('Content-Type', 'application/json; charset=utf-8');
   return new Response(JSON.stringify({ error: msg, timestamp: new Date().toISOString() }, null, 2), { status: code, headers: h });
 }
-function validateRequest(req) {
-  const origin = req.headers.get('Origin');
-  const referer = req.headers.get('Referer');
-  const userAgent = req.headers.get('User-Agent') || '';
-  const apiToken = req.headers.get('X-API-Token');
-
-  // API token bypass
-  if (apiToken && VALID_API_TOKENS.has(apiToken)) {
-    return { allowed: true, origin: null, reason: null };
-  }
-
-  const suspiciousAgents = [
-    'curl/', 'wget/', 'postman', 'insomnia', 'httpie',
-    'python-requests', 'python-urllib', 'go-http-client',
-    'java/', 'apache-httpclient', 'okhttp', 'rest-client',
-    'powershell', 'node-fetch', 'axios/', 'got/', 'superagent',
-    'php/', 'ruby/', 'perl/', 'scrapy'
-  ];
-  const isSuspicious = suspiciousAgents.some(a => userAgent.toLowerCase().includes(a));
-  if (isSuspicious) {
-    return { allowed: false, reason: 'Access denied: Please use a web browser' };
-  }
-
-  if (!origin) return { allowed: false, reason: 'Origin header required for browser requests' };
-  if (!isAllowedOrigin(origin)) return { allowed: false, reason: `Origin '${origin}' not allowed` };
-  if (referer && !referer.startsWith(origin)) return { allowed: false, reason: 'Invalid referer header' };
-
-  const sSite = req.headers.get('Sec-Fetch-Site');
-  const sMode = req.headers.get('Sec-Fetch-Mode');
-  if (sSite && sMode) return { allowed: true, origin, reason: null };
-
-  const xr = req.headers.get('X-Requested-With');
-  if (!xr || xr !== 'XMLHttpRequest') return { allowed: false, reason: 'Missing required browser security headers' };
-
-  return { allowed: true, origin, reason: null };
-}
 function sanitizeRequestHeaders(headers) {
   const sanitized = new Headers();
   const allowed = ['accept', 'accept-encoding', 'accept-language', 'cache-control', 'content-type', 'user-agent'];
@@ -137,7 +100,7 @@ function validateTargetUrl(targetUrl) {
     const blocked = [
       /^localhost$/i, /^127\./, /^192\.168\./, /^10\./, /^172\.(1[6-9]|2[0-9]|3[01])\./, /^169\.254\./, /^0\./
     ];
-    const isDev = true; // เปิด dev ได้ เพราะ allow localhost origins
+    const isDev = true;
     if (!isDev) {
       const host = u.hostname;
       if (blocked.some(re => re.test(host))) return { valid: false, reason: 'Private/local addresses not allowed' };
@@ -157,89 +120,22 @@ function validateTargetUrl(targetUrl) {
   }
 }
 
-/* ========== Frame policy helpers (toggle) ========== */
+/* ========== Frame policy helpers ========== */
 function getFrameMode(env, key, fallback) {
   const v = (env && env[key] ? String(env[key]) : '').toLowerCase();
-  if (v === 'allow') return 'allow';
-  if (v === 'deny') return 'deny';
-  return fallback; // 'allow' หรือ 'deny'
+  if (v === 'allow' || v === 'deny') return v;
+  return fallback;
 }
-function applyFramePolicy(headers, mode /* 'allow'|'deny' */) {
-  if (mode === 'allow') addIframeHeaders(headers);
-  else headers.set('X-Frame-Options', 'DENY');
+function framePolicy(mode, allowed) {
+  return mode === 'allow'
+    ? secureHeaders({
+      xFrameOptions: 'SAMEORIGIN',
+      contentSecurityPolicy: { 'frame-ancestors': `'self' ${allowed.join(' ')}` }
+    })
+    : secureHeaders({ xFrameOptions: 'DENY' });
 }
 
-/* ========== Common OPTIONS (CORS preflight) ========== */
-app.options('*', (c) => {
-  const sec = validateRequest(c.req.raw);
-  if (!sec.allowed) return jerr(403, sec.reason);
-  const h = baseHeaders(sec.origin);
-  addCors(h, c.req.raw);
-  h.set('Access-Control-Max-Age', '86400');
-
-  // ใส่ frame policy ตาม default รวม (preflight จะไม่ผูกกับเส้นทางแน่ชัด)
-  // เลือกโหมดที่เข้มสุดไว้ก่อน: DENY
-  applyFramePolicy(h, 'deny');
-  return new Response(null, { status: 204, headers: h });
-});
-
-/* ==================== 1) /proxy ==================== */
-app.all('/proxy', async (c) => {
-  const req = c.req.raw;
-  if (req.method === 'OPTIONS') return c.notFound();
-  const sec = validateRequest(req);
-  if (!sec.allowed) return jerr(403, sec.reason);
-
-  const url = new URL(req.url);
-  const targetUrl = url.searchParams.get('url');
-
-  const headers = baseHeaders(sec.origin);
-  addCors(headers, req);
-  // ใช้โหมดจาก env (default: deny)
-  const frameMode = getFrameMode(c.env, 'FRAME_PROXY', 'deny');
-  applyFramePolicy(headers, frameMode);
-
-  if (!targetUrl) return jerr(400, "Missing 'url' query parameter", headers);
-
-  const decoded = decodeURIComponent(targetUrl);
-  const chk = validateTargetUrl(decoded);
-  if (!chk.valid) return jerr(400, chk.reason, headers);
-
-  // Cache
-  const cache = caches.default;
-  const cacheKey = new Request(req.url, { method: req.method, headers: req.headers });
-  const hit = await cache.match(cacheKey);
-  if (hit) {
-    const h2 = new Headers(hit.headers);
-    addCors(h2, req);
-    applyFramePolicy(h2, frameMode); // ใส่ตามโหมดแม้เป็น cache
-    h2.set('X-Content-Type-Options', 'nosniff');
-    return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers: h2 });
-  }
-
-  try {
-    const upstream = await fetch(decoded, {
-      method: req.method,
-      headers: sanitizeRequestHeaders(req.headers),
-      body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : null
-    });
-
-    const respHeaders = new Headers(upstream.headers);
-    addCors(respHeaders, req);
-    applyFramePolicy(respHeaders, frameMode);
-    respHeaders.set('X-Content-Type-Options', 'nosniff');
-    respHeaders.set('Cache-Control', 'public, max-age=0, s-maxage=30, must-revalidate');
-
-    const proxied = new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: respHeaders });
-
-    if (req.method === 'GET') c.executionCtx.waitUntil(cache.put(cacheKey, proxied.clone()));
-    return proxied;
-  } catch (err) {
-    return jerr(500, `Proxy error: ${err.message}`, headers);
-  }
-});
-
-/* ==================== 2) /radar ==================== */
+/* ========== Radar helpers (เหมือนเดิม) ========== */
 const stationDelayMin = {
   chn: 2.5, skm: 4.5, cri: 4, lmp: 4, phs: 4.5, tak: 6.5, kkn: 5.5, skn: 6.5,
   cmp: 6.5, pkt: 6.5, rng: 6.5, srt: 5.1, stp: 6.5, hyi: 5.1, trg: 6.5,
@@ -261,7 +157,14 @@ function getRadarPreset(kind, radarUrl = '') {
     }
   }
 }
-function getPeriodMinutes(release) { const s = [...release].sort((a, b) => a - b); if (s.length <= 1) return 0; let g = Infinity; for (let i = 1; i < s.length; i++) g = Math.min(g, s[i] - s[i - 1]); const wrap = (60 - s[s.length - 1]) + s[0]; return Math.min(g, wrap); }
+function getPeriodMinutes(release) {
+  const s = [...release].sort((a, b) => a - b);
+  if (s.length <= 1) return 0;
+  let g = Infinity;
+  for (let i = 1; i < s.length; i++) g = Math.min(g, s[i] - s[i - 1]);
+  const wrap = (60 - s[s.length - 1]) + s[0];
+  return Math.min(g, wrap);
+}
 function calcRadarTimeFlexible(lastModifiedRaw, release, delayMs) {
   const slots = [...release].sort((a, b) => a - b);
   let base = lastModifiedRaw ? new Date(lastModifiedRaw) : new Date(Date.now() - delayMs);
@@ -284,21 +187,168 @@ function calcRadarTimeFlexible(lastModifiedRaw, release, delayMs) {
   return best;
 }
 
+/* ========== RYRRadar helpers (เหมือนเดิม) ========== */
+function getRadarStationKey(shortCode) {
+  const map = {
+    OMK: 'omkoi', RKG: 'rongkwang', RSL: 'rasisalai', SHN: 'singha', PMI: 'phimai',
+    BPH: 'banphue', SAT: 'sattahip', PTH: 'pathio', PNM: 'phanom', INB: 'inburi',
+    TKH: 'takhli', PDG: 'pluakdaeng'
+  };
+  return map[shortCode.toUpperCase()] || null;
+}
+function getRadarStationName(key, lang = "th") {
+  const stations = {
+    omkoi: { th: 'อมก๋อย', en: 'Omkoi' },
+    rongkwang: { th: 'ร้องกวาง', en: 'Rong Kwang' },
+    rasisalai: { th: 'ราษีไศล', en: 'Rasisalai' },
+    singha: { th: 'สิงหนคร', en: 'Singhanakhon' },
+    phimai: { th: 'พิมาย', en: 'Phimai' },
+    banphue: { th: 'บ้านผือ', en: 'Ban Phue' },
+    sattahip: { th: 'สัตหีบ', en: 'Sattahip' },
+    pathio: { th: 'ปะทิว', en: 'Pathio' },
+    phanom: { th: 'พนม', en: 'Phanom' },
+    inburi: { th: 'อินทร์บุรี', en: 'In Buri' },
+    takhli: { th: 'ตาคลี', en: 'Takhli' },
+    pluakdaeng: { th: 'ปลวกแดง', en: 'Pluak Daeng' }
+  };
+  const s = stations[key];
+  return s ? (s[lang] || s["th"]) : '';
+}
+async function fetchViaAccess(env, key) {
+  const url = `${env.PROXY_BASE}/${key}`;
+  const res = await fetch(url, {
+    headers: {
+      'CF-Access-Client-Id': env.CF_ACCESS_CLIENT_ID,
+      'CF-Access-Client-Secret': env.CF_ACCESS_CLIENT_SECRET
+    },
+    cf: { cacheTtl: 30, cacheEverything: true }
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}: ${body || res.statusText}`);
+  }
+  const updated = res.headers.get('last-modified') || res.headers.get('x-amz-meta-last-modified');
+  const json = await res.json();
+  return { json, updated };
+}
+
+/* ==================== Global middlewares (Hono) ==================== */
+
+// 1) Security headers (default DENY; ค่อย override per-route)
+app.use('*', secureHeaders({
+  xFrameOptions: 'DENY',
+  referrerPolicy: 'strict-origin-when-cross-origin',
+  xContentTypeOptions: 'nosniff'
+}));
+
+// 2) CORS (ตาม allowlist)
+app.use('*', cors({
+  origin: (origin) => isAllowedOrigin(origin) ? origin : '',
+  allowMethods: ['GET', 'HEAD', 'POST', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'X-Requested-With', 'X-API-Token', 'Authorization'],
+  exposeHeaders: ['Radar-Time', 'Latest-Fetch'],
+  credentials: true,
+  maxAge: 86400
+}));
+
+// 3) Request guard (แทน validateRequest; คง API token bypass)
+app.use('*', async (c, next) => {
+  const req = c.req.raw;
+  const origin = req.headers.get('Origin');
+  const referer = req.headers.get('Referer') || '';
+  const sSite = req.headers.get('Sec-Fetch-Site');
+  const sMode = req.headers.get('Sec-Fetch-Mode');
+  const apiToken = req.headers.get('X-API-Token');
+
+  if (apiToken && VALID_API_TOKENS.has(apiToken)) return next();
+
+  if (!origin) return c.body(jerr(403, 'Origin header required for browser requests').body, 403, jerr(403, '').headers);
+  if (!isAllowedOrigin(origin)) return c.body(jerr(403, `Origin '${origin}' not allowed`).body, 403, jerr(403, '').headers);
+  if (referer && !referer.startsWith(origin)) return c.body(jerr(403, 'Invalid referer header').body, 403, jerr(403, '').headers);
+  if (!sSite || !sMode) return c.body(jerr(403, 'Missing required browser security headers').body, 403, jerr(403, '').headers);
+
+  return next();
+});
+
+/* ==================== Common OPTIONS (เก็บพฤติกรรมเดิม) ==================== */
+app.options('*', (c) => {
+  const req = c.req.raw;
+  const h = baseHeaders(req.headers.get('Origin'));
+  addCors(h, req);
+  h.set('Access-Control-Max-Age', '86400');
+  h.set('X-Frame-Options', 'DENY');
+  return new Response(null, { status: 204, headers: h });
+});
+
+/* ==================== 1) /proxy ==================== */
+app.all('/proxy', async (c) => {
+  const req = c.req.raw;
+  if (req.method === 'OPTIONS') return c.notFound();
+
+  const mode = getFrameMode(c.env, 'FRAME_PROXY', 'deny');
+  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
+
+  const url = new URL(req.url);
+  const targetUrl = url.searchParams.get('url');
+
+  const headers = baseHeaders(req.headers.get('Origin'));
+  addCors(headers, req);
+  if (mode === 'allow') addIframeHeaders(headers); else headers.set('X-Frame-Options', 'DENY');
+
+  if (!targetUrl) return jerr(400, "Missing 'url' query parameter", headers);
+
+  const decoded = decodeURIComponent(targetUrl);
+  const chk = validateTargetUrl(decoded);
+  if (!chk.valid) return jerr(400, chk.reason, headers);
+
+  const cache = caches.default;
+  const cacheKey = new Request(req.url, { method: req.method, headers: req.headers });
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const h2 = new Headers(hit.headers);
+    addCors(h2, req);
+    if (mode === 'allow') addIframeHeaders(h2); else h2.set('X-Frame-Options', 'DENY');
+    h2.set('X-Content-Type-Options', 'nosniff');
+    return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers: h2 });
+  }
+
+  try {
+    const upstream = await fetch(decoded, {
+      method: req.method,
+      headers: sanitizeRequestHeaders(req.headers),
+      body: (req.method !== 'GET' && req.method !== 'HEAD') ? req.body : null
+    });
+
+    const respHeaders = new Headers(upstream.headers);
+    addCors(respHeaders, req);
+    if (mode === 'allow') addIframeHeaders(respHeaders); else respHeaders.set('X-Frame-Options', 'DENY');
+    respHeaders.set('X-Content-Type-Options', 'nosniff');
+    respHeaders.set('Cache-Control', 'public, max-age=0, s-maxage=30, must-revalidate');
+
+    const proxied = new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: respHeaders });
+
+    if (req.method === 'GET') c.executionCtx.waitUntil(cache.put(cacheKey, proxied.clone()));
+    return proxied;
+  } catch (err) {
+    return jerr(500, `Proxy error: ${err.message}`, headers);
+  }
+});
+
+/* ==================== 2) /radar ==================== */
 app.all('/radar', async (c) => {
   const req = c.req.raw;
   if (req.method === 'OPTIONS') return c.notFound();
-  const sec = validateRequest(req);
-  if (!sec.allowed) return jerr(403, sec.reason);
+
+  const mode = getFrameMode(c.env, 'FRAME_RADAR', 'allow');
+  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
 
   const url = new URL(req.url);
   const imageUrl = url.searchParams.get('radarurl');
   const radarKind = (url.searchParams.get('radar') || 'tmd').toLowerCase();
 
-  const headers = baseHeaders(sec.origin);
+  const headers = baseHeaders(req.headers.get('Origin'));
   addCors(headers, req);
-  // default เปิดให้ฝังได้ (allow)
-  const frameMode = getFrameMode(c.env, 'FRAME_RADAR', 'allow');
-  applyFramePolicy(headers, frameMode);
+  if (mode === 'allow') addIframeHeaders(headers); else headers.set('X-Frame-Options', 'DENY');
 
   if (!imageUrl) return jerr(400, 'Incomplete parameters: use ?radarurl=...&radar=tmd|bkk|tmd120', headers);
 
@@ -316,10 +366,10 @@ app.all('/radar', async (c) => {
     }, null, 2), { status: 400, headers });
   }
 
-  // cache key ผูกกับ origin
   const cache = caches.default;
   const cacheKeyUrl = new URL(req.url);
-  cacheKeyUrl.searchParams.set('__o', sec.origin && isAllowedOrigin(sec.origin) ? sec.origin : 'no-origin');
+  const origin = req.headers.get('Origin');
+  cacheKeyUrl.searchParams.set('__o', origin && isAllowedOrigin(origin) ? origin : 'no-origin');
   const cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
 
   if (req.method === 'GET') {
@@ -327,7 +377,6 @@ app.all('/radar', async (c) => {
     if (hit) return hit;
   }
 
-  // upstream
   radarUrl.searchParams.set('cb', Date.now().toString());
   const upstream = await fetch(radarUrl.toString(), {
     cf: { cacheEverything: false, cacheTtl: 0 },
@@ -382,60 +431,14 @@ app.all('/radar', async (c) => {
 });
 
 /* ==================== 3) /ryrradar & /ryrradar/:code ==================== */
-function getRadarStationKey(shortCode) {
-  const map = {
-    OMK: 'omkoi', RKG: 'rongkwang', RSL: 'rasisalai', SHN: 'singha', PMI: 'phimai',
-    BPH: 'banphue', SAT: 'sattahip', PTH: 'pathio', PNM: 'phanom', INB: 'inburi',
-    TKH: 'takhli', PDG: 'pluakdaeng'
-  };
-  return map[shortCode.toUpperCase()] || null;
-}
-function getRadarStationName(key, lang = "th") {
-  const stations = {
-    omkoi: { th: 'อมก๋อย', en: 'Omkoi' },
-    rongkwang: { th: 'ร้องกวาง', en: 'Rong Kwang' },
-    rasisalai: { th: 'ราษีไศล', en: 'Rasisalai' },
-    singha: { th: 'สิงหนคร', en: 'Singhanakhon' },
-    phimai: { th: 'พิมาย', en: 'Phimai' },
-    banphue: { th: 'บ้านผือ', en: 'Ban Phue' },
-    sattahip: { th: 'สัตหีบ', en: 'Sattahip' },
-    pathio: { th: 'ปะทิว', en: 'Pathio' },
-    phanom: { th: 'พนม', en: 'Phanom' },
-    inburi: { th: 'อินทร์บุรี', en: 'In Buri' },
-    takhli: { th: 'ตาคลี', en: 'Takhli' },
-    pluakdaeng: { th: 'ปลวกแดง', en: 'Pluak Daeng' }
-  };
-  const s = stations[key];
-  return s ? (s[lang] || s["th"]) : '';
-}
-async function fetchViaAccess(env, key) {
-  const url = `${env.PROXY_BASE}/${key}`;
-  const res = await fetch(url, {
-    headers: {
-      'CF-Access-Client-Id': env.CF_ACCESS_CLIENT_ID,
-      'CF-Access-Client-Secret': env.CF_ACCESS_CLIENT_SECRET
-    },
-    cf: { cacheTtl: 30, cacheEverything: true }
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${body || res.statusText}`);
-  }
-  const updated = res.headers.get('last-modified') || res.headers.get('x-amz-meta-last-modified');
-  const json = await res.json();
-  return { json, updated };
-}
-
 app.get('/ryrradar', async (c) => {
   const req = c.req.raw;
-  const sec = validateRequest(req);
-  if (!sec.allowed) return jerr(403, sec.reason);
+  const mode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
+  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
 
-  const headers = baseHeaders(sec.origin);
+  const headers = baseHeaders(req.headers.get('Origin'));
   addCors(headers, req);
-  // default เปิดให้ฝังได้
-  const frameMode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
-  applyFramePolicy(headers, frameMode);
+  if (mode === 'allow') addIframeHeaders(headers); else headers.set('X-Frame-Options', 'DENY');
 
   try {
     const { json, updated } = await fetchViaAccess(c.env, 'radar/ryrradar.json');
@@ -453,13 +456,12 @@ app.get('/ryrradar', async (c) => {
 
 app.get('/ryrradar/:code', async (c) => {
   const req = c.req.raw;
-  const sec = validateRequest(req);
-  if (!sec.allowed) return jerr(403, sec.reason);
+  const mode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
+  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
 
-  const headers = baseHeaders(sec.origin);
+  const headers = baseHeaders(req.headers.get('Origin'));
   addCors(headers, req);
-  const frameMode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
-  applyFramePolicy(headers, frameMode);
+  if (mode === 'allow') addIframeHeaders(headers); else headers.set('X-Frame-Options', 'DENY');
 
   const shortCode = c.req.param('code').toUpperCase();
   const radarKey = getRadarStationKey(shortCode);

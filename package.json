@@ -1,5 +1,5 @@
 {
-  "name": "rtdb-backend",
+  "name": "rtdbbk",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

@@ -1,0 +1,14 @@
+{
+  "account_id": "ab3424a4adb3ea31508ddabe97164721",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rtdb-backend",
+  "main": "src/index.js",
+  "compatibility_date": "2025-08-24",
+  "workers_dev": true,
+  "vars": {
+    "FRAME_PROXY": "deny",
+    "FRAME_RADAR": "allow",
+    "FRAME_RYRRADAR": "allow",
+    "PROXY_BASE": "https://r2-proxy-access.vtsc48583.workers.dev/r2"
+  }
+}

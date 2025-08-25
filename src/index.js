@@ -334,8 +334,8 @@ app.all('/proxy', async (c) => {
   }
 });
 
-/* ==================== 2) /radar ==================== */
-app.all('/radar', async (c) => {
+/* ==================== 2) /tmdradar ==================== */
+app.all('/tmdradar', async (c) => {
   const req = c.req.raw;
   if (req.method === 'OPTIONS') return c.notFound();
 

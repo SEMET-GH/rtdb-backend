@@ -286,7 +286,7 @@ app.all('/proxy', async (c) => {
   if (req.method === 'OPTIONS') return c.notFound();
 
   const mode = getFrameMode(c.env, 'FRAME_PROXY', 'deny');
-  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
+  await framePolicy(mode, Array.from(FRAME_ANCESTORS))(c, async () => { });
 
   const url = new URL(req.url);
   const targetUrl = url.searchParams.get('url');
@@ -340,7 +340,7 @@ app.all('/tmdradar', async (c) => {
   if (req.method === 'OPTIONS') return c.notFound();
 
   const mode = getFrameMode(c.env, 'FRAME_RADAR', 'allow');
-  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
+  await framePolicy(mode, Array.from(FRAME_ANCESTORS))(c, async () => { });
 
   const url = new URL(req.url);
   const imageUrl = url.searchParams.get('radarurl');
@@ -434,7 +434,7 @@ app.all('/tmdradar', async (c) => {
 app.get('/ryrradar', async (c) => {
   const req = c.req.raw;
   const mode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
-  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
+  await framePolicy(mode, Array.from(FRAME_ANCESTORS))(c, async () => { });
 
   const headers = baseHeaders(req.headers.get('Origin'));
   addCors(headers, req);
@@ -457,7 +457,7 @@ app.get('/ryrradar', async (c) => {
 app.get('/ryrradar/:code', async (c) => {
   const req = c.req.raw;
   const mode = getFrameMode(c.env, 'FRAME_RYRRADAR', 'allow');
-  await framePolicy(mode, Array.from(ALLOW_ORIGINS))(c, async () => { });
+  await framePolicy(mode, Array.from(FRAME_ANCESTORS))(c, async () => { });
 
   const headers = baseHeaders(req.headers.get('Origin'));
   addCors(headers, req);

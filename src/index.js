@@ -24,6 +24,13 @@ const ALLOW_ORIGINS = new Set([
   'http://127.0.0.1:5502'
 ]);
 
+const FRAME_ANCESTORS = [
+  "'self'",
+  'https://radartambon.pages.dev',
+  'https://www.radartambon.com',
+  'https://sites.google.com/view/radartambon'
+];
+
 const VALID_API_TOKENS = new Set([
   'vtsc-48583-secure-proxy-token-2025'
 ]);
@@ -68,7 +75,8 @@ function addCors(headers, req) {
 function addIframeHeaders(headers) {
   const allowedOriginsString = Array.from(ALLOW_ORIGINS).join(' ');
   headers.set('X-Frame-Options', 'SAMEORIGIN');
-  headers.set('Content-Security-Policy', `frame-ancestors 'self' ${allowedOriginsString};`);
+  // headers.set('Content-Security-Policy', `frame-ancestors 'self' ${allowedOriginsString};`);
+  headers.set('Content-Security-Policy', `frame-ancestors ${FRAME_ANCESTORS.join(' ')};`);
 }
 function denyHeaders() {
   const h = new Headers();

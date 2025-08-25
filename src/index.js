@@ -1,11 +1,3 @@
-// wrangler.toml ควรกำหนดตัวแปรแวดล้อมอย่างน้อย:
-// PROXY_BASE = "https://<your-id1-worker>.workers.dev/r2"
-// CF_ACCESS_CLIENT_ID = "<id from CF Access>"
-// CF_ACCESS_CLIENT_SECRET = "<secret from CF Access>"
-// FRAME_PROXY = "deny" | "allow"       (optional; default: deny)
-// FRAME_RADAR = "allow" | "deny"       (optional; default: allow)
-// FRAME_RYRRADAR = "allow" | "deny"    (optional; default: allow)
-
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -73,8 +65,8 @@ function addCors(headers, req) {
   headers.set('Access-Control-Expose-Headers', 'Radar-Time, Latest-Fetch');
 }
 function addIframeHeaders(headers) {
-  const allowedOriginsString = Array.from(ALLOW_ORIGINS).join(' ');
   headers.set('X-Frame-Options', 'SAMEORIGIN');
+  // const allowedOriginsString = Array.from(ALLOW_ORIGINS).join(' ');
   // headers.set('Content-Security-Policy', `frame-ancestors 'self' ${allowedOriginsString};`);
   headers.set('Content-Security-Policy', `frame-ancestors ${FRAME_ANCESTORS.join(' ')};`);
 }

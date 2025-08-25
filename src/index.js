@@ -336,7 +336,7 @@ app.all('/tmdradar', async (c) => {
   const req = c.req.raw;
   if (req.method === 'OPTIONS') return c.notFound();
 
-  const mode = getFrameMode(c.env, 'FRAME_RADAR', 'allow');
+  const mode = getFrameMode(c.env, 'FRAME_TMDRADAR', 'allow');
   await framePolicy(mode, Array.from(FRAME_ANCESTORS))(c, async () => { });
 
   const url = new URL(req.url);

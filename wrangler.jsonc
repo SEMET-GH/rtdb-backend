@@ -4,11 +4,22 @@
   "name": "rtdbbk",
   "main": "src/index.js",
   "compatibility_date": "2025-08-24",
-  "workers_dev": true,
+  "workers_dev": false,
   "vars": {
     "FRAME_PROXY": "deny",
-    "FRAME_RADAR": "allow",
+    "FRAME_TMDRADAR": "allow",
     "FRAME_RYRRADAR": "allow",
     "PROXY_BASE": "https://r2-proxy-access.vtsc48583.workers.dev/r2"
-  }
+  },
+  "observability": {
+    "logs": {
+      "enabled": true
+    }
+  },
+  "routes": [
+    {
+      "pattern": "rtdbbk.semet.uk/*",
+      "zone_id": "0165f7731edceb786daccb3ab82a8277"
+    }
+  ]
 }
